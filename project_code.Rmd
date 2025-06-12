@@ -1,0 +1,1469 @@
+---
+title: "Environmental Equity, Health Vulnerability, and To-
+pographic Flood Susceptibility in Washington, D.C.:A Spatial Analysis of Risk and Resilience"
+format: html
+editor: visual
+---
+
+```{r}
+required_pkgs <- c("tigris", "sf", "terra", "whitebox", "elevatr", "exactextractr", "ggplot2", "classInt", "tidycensus", "tidyverse", "sf", "ggplot2", "plotly", "viridis", "terra", "party")
+new_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[, "Package"])]
+if (length(new_pkgs)) install.packages(new_pkgs)
+
+library(tigris)
+library(sf)
+library(terra)
+library(whitebox)
+library(elevatr)
+library(exactextractr)
+library(ggplot2)
+library(classInt)
+library(tidyverse)
+library(viridis)
+library(plotly)
+library(scales)
+library(tidycensus)
+library(tigris)
+library(dplyr)
+library(patchwork)
+library(party)
+
+getwd()
+setwd("C:/Users/richa_mbslxw6/Desktop/gwu_bootcamp_data/RFA_Project")
+```
+
+# PLACES Data
+
+## D.C. Tracts
+
+```{r}
+#| echo: false
+# Load census tracts for DC
+options(tigris_use_cache = TRUE)
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")                                
+```
+
+```{r}
+places_data <- read_csv("cdc_places.csv")
+```
+
+## Asthma
+
+```{r}
+asthma_data <- places_data |> 
+  filter(Short_Question_Text == 'Current Asthma')|>
+  mutate(LocationID = as.character(LocationID)) |>
+  select(LocationID, Asthma = Data_Value)
+
+census_asthma <- dc_tracts |>
+  left_join(asthma_data, by = c("GEOID" = "LocationID"))
+
+asthma_plot <- ggplot(census_asthma) +
+  geom_sf(aes(fill = Asthma,
+              text = paste("Tract ID: ", GEOID)), 
+          color = "white", size = 0.1, alpha = 0.85) +
+  scale_fill_viridis(
+    option = "C",
+    na.value = "gray90",
+    name = "Asthma (%)"
+  ) +
+  labs(
+    title = "Asthma Prevalence by Census Tract in Washington, DC"
+  ) +
+  theme_minimal()
+
+asthma_map <- ggplotly(asthma_plot, tooltip = "text") |>
+  layout(hoverlabel = list(
+    bgcolor = "#f0f0f0",
+    font = list(color = "#111111")
+  ))
+
+asthma_map
+
+```
+
+## Diabetes
+
+```{r}
+diabetes_data <- places_data |>
+  filter(Short_Question_Text == 'Diabetes') |>
+  mutate(LocationID = as.character(LocationID)) |>
+  select(LocationID, Diabetes = Data_Value)
+
+census_diabetes <- dc_tracts |>
+  left_join(diabetes_data, by = c("GEOID" = "LocationID"))
+
+
+diabetes_plot <- ggplot(census_diabetes) +
+  geom_sf(aes(fill = Diabetes,
+              text = paste("Tract ID: ", GEOID)), 
+          color = "white", size = 0.1, alpha = 0.85) +
+  scale_fill_viridis(
+    option = "D",
+    na.value = "gray90",
+    name = "Diabetes (%)"
+  ) +
+  labs(
+    title = "Diabetes Prevalence by Census Tract in Washington, DC"
+  ) +
+  theme_minimal()
+
+diabetes_map <- ggplotly(diabetes_plot, tooltip = "text") |>
+  layout(hoverlabel = list(
+  bgcolor = "#f0f0f0",
+  font = list(color = "#111111")
+))
+
+diabetes_map
+```
+
+# ACS Data
+
+```{r}
+
+census_api_key("85486d8338b39ba4a1d21d4d5552659b1b95f553", install = TRUE, overwrite = TRUE)
+readRenviron("~/.Renviron")
+```
+
+## Poverty
+
+```{r}
+
+# Get poverty variables
+poverty_data <- get_acs(
+  geography = "tract",
+  state = "DC",
+  variables = c(
+    total = "B17001_001",
+    below_poverty = "B17001_002"
+  ),
+  year = 2021,
+  geometry = TRUE
+)
+
+# Remove geometry to work with clean table
+poverty_wide <- poverty_data %>%
+  st_drop_geometry() %>%
+  select(GEOID, NAME, variable, estimate) %>%
+  pivot_wider(names_from = variable, values_from = estimate)
+
+# Calculate percent in poverty
+poverty_wide <- poverty_wide %>%
+  mutate(pct_poverty = ifelse(total == 0, NA, 100 * below_poverty / total))
+
+# Join back to original geometry
+poverty_sf <- poverty_data %>%
+  select(GEOID, geometry) %>%
+  distinct() %>%
+  left_join(poverty_wide, by = "GEOID")
+
+
+# Plot
+poverty_plot <- ggplot(poverty_sf) +
+  geom_sf(aes(fill = pct_poverty,
+              text = paste0("Tract ID: ", GEOID,
+                            "<br>Poverty Rate: ", round(pct_poverty, 1), "%")),
+          color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "magma", name = "% in Poverty", na.value = "gray90", direction = -1) +
+  labs(title = "Poverty Rate by Census Tract in Washington, DC") +
+  theme_minimal()
+
+ggplotly(poverty_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "#f0f0f0", font = list(color = "#111111")))
+
+                       
+
+```
+
+**Tract 9511:** If the entire population of the tract resides in group quarters where residents have no personal income: Homeless shelter, Transitional housing, Correctional facilities , Mental health or substance abuse institutions,
+
+...then the Census may record all residents as **living in poverty**, regardless of whether the facility provides for basic needs. \# how the census tract defines poverty
+
+## Age (% \>= 65 and % \<= 14)
+
+```{r}
+# Replace with your Census API key if needed
+# census_api_key("YOUR_API_KEY", install = TRUE)
+
+variables <- c(
+  total_pop = "B01001_001",
+  male_0_4 = "B01001_003",
+  male_5_9 = "B01001_006",
+  male_10_14 = "B01001_009",
+  female_0_4 = "B01001_027",
+  female_5_9 = "B01001_030",
+  female_10_14 = "B01001_033",
+  male_65_66 = "B01001_020",
+  male_67_69 = "B01001_021",
+  male_70_74 = "B01001_022",
+  male_75_79 = "B01001_023",
+  male_80_plus = "B01001_024",
+  female_65_66 = "B01001_044",
+  female_67_69 = "B01001_045",
+  female_70_74 = "B01001_046",
+  female_75_79 = "B01001_047",
+  female_80_plus = "B01001_048"
+)
+
+age_data <- get_acs(
+  geography = "tract",
+  state = "DC",
+  variables = variables,
+  year = 2021,
+  geometry = TRUE
+)
+
+age_wide <- age_data %>%
+  select(GEOID, variable, estimate, geometry) %>%
+  st_as_sf() %>%
+  st_transform(4326) %>% # standard lat-long CRS
+  st_set_geometry(NULL) %>% # geometry duplicated, just keep one set later
+  pivot_wider(names_from = variable, values_from = estimate) %>%
+  mutate(
+    under_13 = male_0_4 + male_5_9 + male_10_14 + female_0_4 + female_5_9 +
+      female_10_14, 
+    over_65 = male_65_66 + male_67_69 + male_70_74 + male_75_79 + male_80_plus +
+      female_65_66 + female_67_69 + female_70_74 + female_75_79 + female_80_plus,
+    pct_under_13 = 100 * under_13 / total_pop,
+    pct_over_65 = 100 * over_65 / total_pop
+  ) %>%
+  left_join(age_data %>% select(GEOID, geometry) %>% distinct(), by = "GEOID") %>%
+  st_as_sf()
+
+age_wide <- age_wide %>%
+  mutate(percent_vulnerable = pct_under_13 + pct_over_65)
+
+age_vuln_plot <- ggplot(age_wide) +
+  geom_sf(aes(fill = percent_vulnerable, text = paste0(
+    "Tract: ", GEOID,
+    "<br>% Under 13: ", round(pct_under_13, 1), "%",
+    "<br>% Over 65: ", round(pct_over_65, 1), "%",
+    "<br>Composite Age Vulnerability: ", round(percent_vulnerable, 1), "%"
+  )),
+  color = "white", size = 0.1) +
+  scale_fill_viridis(option = "inferno", direction = -1, name = "Vulnerable Ages (%)") +
+  labs(title = "Composite Vulnerable Ages by Census Tract in DC") +
+  theme_minimal()
+
+ggplotly(age_vuln_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "#f0f0f0"))
+
+
+
+```
+
+## Elevation (Base Level)
+
+### Open Data DC
+
+Base Flood Elevation is elevation of flooding expected during 1% annual chance event. Not a prediction of record flood level, but derived statistically. Measured in **feet** above sea level.
+
+```{r}
+base_elev_data <- st_read("Floodplain_Base_Flood_Elevations.shp")
+
+base_elev_data <- st_transform(base_elev_data, st_crs(dc_tracts))
+
+base_tracts <- st_intersection(dc_tracts, base_elev_data)
+
+# Example: average BFE per tract
+tract_bfe <- base_tracts %>%
+  group_by(GEOID) %>%
+  st_drop_geometry() %>%
+  summarize(mean_elev = mean(as.numeric(ELEV), na.rm = TRUE))
+
+dc_base_flood <- left_join(dc_tracts, tract_bfe, by = "GEOID") %>%
+  mutate(mean_elev_m = mean_elev * 0.3048) %>%
+  mutate(mean_elev_m = replace_na(mean_elev_m, 0))
+
+bfe_plot <- ggplot(dc_base_flood) +
+  geom_sf(aes(fill = mean_elev_m,
+              text = paste0("Tract ID: ", GEOID,
+                            "<br>Mean BFE: ", ifelse(is.na(mean_elev), 0, round(mean_elev, 1)), " meters")),
+          color = "black", size = 0.05, alpha = 0.9) +  # thinner borders, 70% opacity fill
+  scale_fill_viridis_c(option = "magma", name = "Mean BFE (meters)", na.value = "gray90", direction = -1) +
+  labs(title = "Base Flood Elevation by Census Tract in Washington, DC") +
+  theme_minimal()
+
+ggplotly(bfe_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+```
+
+### Pixels
+
+```{r}
+
+# Convert BFE elevation to meters
+base_elev_data <- base_elev_data %>%
+  mutate(ELEV_m = as.numeric(ELEV) * 0.3048)
+
+# Reproject tracts to match BFE layer
+dc_tracts_proj <- st_transform(dc_tracts, st_crs(base_elev_data))
+
+# Interactive map with tract outlines
+plot_ly() %>%
+  # BFE zones fill
+  add_sf(
+    data = base_elev_data,
+    color = ~ELEV_m,
+    colors = viridis(100, option = "magma", direction = -1),
+    text = ~paste0("BFE: ", round(ELEV_m, 1), " m"),
+    hoverinfo = "text",
+    showlegend = FALSE
+  ) %>%
+  # Census tract outlines
+  add_sf(
+    data = dc_tracts_proj,
+    fillcolor = "transparent", # <-- no fill
+    line = list(color = "black", width = 0.3),
+    hoverinfo = "none",
+    showlegend = FALSE
+  ) %>%
+  layout(
+    title = "BFE Zones with Census Tract Outlines in Washington, DC",
+    hoverlabel = list(bgcolor = "white", font = list(color = "black")),
+    coloraxis = list(colorbar = list(title = "BFE (m)"))
+  )
+
+
+```
+
+## Elevation (Ground Level)
+
+### AWS Terrain Tiles (Mean)
+
+Measured in **meters** above sea level. Taking the mean for average elevation. Derived from global digital elevation models, using vertical datum. It calculates the average elevation over each cell (a fixed square of 30 meters x 30 meters).
+
+```{r}
+
+options(tigris_use_cache = TRUE)
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")
+
+# Download Elevation Data
+dc_elevation <- get_elev_raster(locations = dc_tracts, z = 13, clip = "locations")
+
+# Project Tracts to Match Raster CRS
+dc_tracts_proj <- st_transform(dc_tracts, crs = crs(dc_elevation))
+
+# Extract Mean Elevation per Tract
+elevation_means <- exact_extract(dc_elevation, dc_tracts_proj, 'mean')
+
+# Add elevation to tract data
+dc_tracts_elev <- dc_tracts_proj %>%
+  mutate(Mean_Elevation = elevation_means)
+
+elevation_plot <- ggplot(dc_tracts_elev) +
+  geom_sf(aes(fill = Mean_Elevation,
+              text = paste0(
+                "Tract ID: ", GEOID, 
+                "<br>Mean Elevation: ", 
+                ifelse(is.na(Mean_Elevation), 0, round(Mean_Elevation, 1)), " m", alpha = 0.9
+              )),
+          color = "white", size = 0.2) +
+  scale_fill_viridis_c(option = "B", name = "Elevation (m)", na.value = "gray90") +
+  labs(title = "Mean Ground Elevation by Census Tract in Washington, DC") +
+  theme_minimal()
+
+ggplotly(elevation_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+```
+
+### Pixels
+
+```{r}
+# Convert raster to data frame (pixel values)
+elev_df <- as.data.frame(dc_elevation, xy = TRUE)
+colnames(elev_df)[3] <- "Elevation"
+
+# Optional: remove NA pixels
+elev_df <- elev_df[!is.na(elev_df$Elevation), ]
+
+plot_ly(
+  data = elev_df,
+  x = ~x, y = ~y,
+  z = ~Elevation,
+  type = "heatmap",
+  colors = viridis::viridis(100),
+  colorbar = list(title = "Elevation (m)")
+) %>%
+  layout(
+    title = "Interactive Pixel-Level Elevation Map of Washington, DC",
+    xaxis = list(title = "Longitude"),
+    yaxis = list(title = "Latitude"),
+    hoverlabel = list(bgcolor = "white", font = list(color = "black"))
+  )
+```
+
+## Flood Depth Risk (Base Level - Ground Level)
+
+```{r}
+
+# Join elevation and BFE data by GEOID
+flood_depth_risk <- left_join(dc_tracts_elev, 
+                           dc_base_flood %>% st_drop_geometry() %>% select(GEOID, mean_elev_m),
+                           by = "GEOID") %>%
+  mutate(flood_depth_m = mean_elev_m - Mean_Elevation)  # Positive = water above ground
+
+flood_risk_plot <- ggplot(flood_depth_risk) +
+  geom_sf(aes(fill = flood_depth_m,
+              text = paste0("Tract ID: ", GEOID,
+                            "<br>Flood Depth: ", round(flood_depth_m, 2), " m")),
+          color = "white", size = 0.2) +
+  scale_fill_viridis_c(option = "A", name = "Flood Depth (m)",
+                       na.value = "gray90", direction = -1,
+                       limits = c(min(flood_depth_risk$flood_depth_m, na.rm = TRUE), 
+                                                       max(flood_depth_risk$flood_depth_m, na.rm = TRUE))) +
+  labs(title = "Estimated Flood Depth (Base Flood Elevation - Ground Elevation)") +
+  theme_minimal()
+
+# Make it interactive
+ggplotly(flood_risk_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+
+```
+
+### Pixels
+
+```{r}
+
+elev_r <- rast(dc_elevation)
+bfe_m <- base_elev_data %>%
+  mutate(ELEV_m = as.numeric(ELEV) * 0.3048)
+
+# Rasterize BFE (same resolution and extent as elevation raster)
+bfe_r <- rasterize(vect(bfe_m), elev_r, field = "ELEV_m")
+
+flood_risk_r <- bfe_r - elev_r
+
+# Reproject tracts to match raster CRS
+dc_tracts_proj <- st_transform(dc_tracts, crs(flood_risk_r))
+
+# Extract flood risk values per tract
+risk_stats <- exact_extract(flood_risk_r, dc_tracts_proj, function(values, coverage_fraction) {
+  total_pixels <- sum(!is.na(values))
+  risk_pixels <- sum(values > 0, na.rm = TRUE)
+  if (total_pixels == 0) return(0)
+  return(100 * risk_pixels / total_pixels)
+})
+
+# Add to tract data
+dc_tracts_risk <- dc_tracts_proj %>%
+  mutate(Risk_Percent = risk_stats)
+
+risk_map <- ggplot(dc_tracts_risk) +
+  geom_sf(aes(fill = Risk_Percent,
+              text = paste0("Tract: ", GEOID,
+                            "<br>% Area at Risk: ", round(Risk_Percent, 1), "%")),
+          color = "black", size = 0.1, alpha = 0.8) +
+  scale_fill_viridis_c(option = "inferno", name = "% Flood Risk Area",
+                       na.value = "gray90", direction = -1) +
+  labs(title = "Percent of Census Tract Area with Positive Flood Risk",
+       caption = "Flood Risk = BFE - Ground Elevation > 0") +
+  theme_minimal()
+
+ggplotly(risk_map, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+```
+
+## Classification into regions at risk of 100-year flood plains and not at risk.
+
+```{r}
+flood_depth_risk<- flood_depth_risk %>%
+  mutate(flood_risk = if_else(flood_depth_m > 0, "Risk", "No Risk"))
+
+bfe_plot <- ggplot(flood_depth_risk) +
+  geom_sf(aes(fill = flood_risk,
+              text = paste0("Tract ID: ", GEOID,
+                            "<br>Flood Depth: ", round(flood_depth_m, 2), " meters",
+                            "<br>Risk Level: ", flood_risk)),
+          color = "white", size = 0.1, alpha = 0.7) +
+  scale_fill_manual(values = c("No Risk" = "#a6cee3", "Risk" = "#e31a1c"), na.value = "gray90") +
+  labs(title = "Binary Flood Risk by Census Tract in Washington, DC") +
+  theme_minimal()
+
+ggplotly(bfe_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+
+
+```
+
+## Distance to Bodies of Water
+
+### Mean
+
+```{r}
+
+
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")
+# Load DC water bodies (lakes + rivers)
+
+dc_water <- area_water(state = "DC", county = "001", year = 2020, class = "sf")
+
+# Reproject both to a projected CRS (meters)
+proj_crs <- 26985  # NAD83 / Maryland (meters)
+dc_tracts_proj <- st_transform(dc_tracts, crs = proj_crs)
+dc_water_proj <- st_transform(dc_water, crs = proj_crs)
+
+# Calculate tract centroids
+tract_centroids <- st_centroid(dc_tracts_proj)
+
+# Calculate nearest distance to water body
+dist_to_water <- st_distance(tract_centroids, dc_water_proj)
+
+# ✅ Step 6: Get minimum distance for each tract (in meters)
+min_dist_m <- apply(dist_to_water, 1, min)
+dc_tracts_dist <- dc_tracts_proj %>%
+  mutate(Distance_to_Water_m = min_dist_m)
+
+# ✅ Step 7: Plot
+dist_plot <- ggplot(dc_tracts_dist) +
+  geom_sf(aes(fill = Distance_to_Water_m,
+              text = paste0("Tract ID: ", GEOID, 
+                            "<br>Distance: ", round(Distance_to_Water_m), " m")),
+          color = "white", size = 0.2) +
+  scale_fill_viridis_c(option = "C", name = "Distance to Water (m)", na.value = "gray90") +
+  labs(title = "Distance to Nearest Water Body by Census Tract in DC") +
+  theme_minimal()
+
+ggplotly(dist_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+```
+
+Distance from tract centroid to the nearest on any body of water, whether it's a river, lake, etc. (point-to-distance measurement).
+
+## Sewer Outflows
+
+```{r}
+
+# 1. Load Census tracts (example: DC 2020)
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")
+
+# 2. Load SSO points (replace with your actual CSV or shapefile path)
+ssos <- read_csv("sanitary_data.csv")
+
+ssos <- ssos |>
+  filter(!is.na(Longitude), !is.na(Latitude))
+
+# Convert SSO points to sf object
+ssos_sf <- st_as_sf(ssos, coords = c("Longitude", "Latitude"), crs = 4326) 
+# Replace "Longitude" and "Latitude" with your actual column names
+
+# 3. Make sure both layers have the same CRS for spatial join
+ssos_sf <- st_transform(ssos_sf, st_crs(dc_tracts))
+
+# 4. Spatial join: assign each SSO point to the tract polygon it falls into
+ssos_in_tracts <- st_join(ssos_sf, dc_tracts, join = st_within)
+
+# 5. Count number of SSO events per tract
+sso_counts <- ssos_in_tracts %>%
+  st_drop_geometry() %>%        # Drop geometry for aggregation
+  group_by(GEOID) %>%           # Group by tract GEOID
+  summarise(SSO_Count = n())    # Count points per tract
+
+# 6. Join counts back to census tracts
+dc_tracts_sso <- left_join(dc_tracts, sso_counts, by = "GEOID")
+
+# Replace NAs with 0 for tracts with no SSO events
+dc_tracts_sso$SSO_Count[is.na(dc_tracts_sso$SSO_Count)] <- 0
+
+# 7. Plot choropleth map of SSO counts by tract
+sso_plot <- ggplot(dc_tracts_sso) +
+  geom_sf(aes(fill = SSO_Count,
+              text = paste0("Tract ID: ", GEOID, "<br>SSO Events: ", SSO_Count)),
+          color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "C", name = "SSO Count") +
+  labs(title = "Sanitary Sewer Overflow Events by Census Tract in DC") +
+  theme_minimal()
+
+# 8. Make interactive with Plotly
+ggplotly(sso_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+
+```
+
+## 100-Year Flood Plains
+
+```{r}
+flood_summary <- read_csv("dc_flood_summary.csv", 
+                          col_types = cols(GEOID = col_character()))
+head(flood_summary)
+
+# Load DC census tracts shapefile from tigris
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")
+
+# Merge flood data with spatial data
+flood_map <- dc_tracts %>%
+  left_join(flood_summary, by = "GEOID")
+
+# 100-Year Floodplain plot
+p <- ggplot(flood_map) +
+  geom_sf(aes(fill = percent_flood_100,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "100-Year Flood %: ", round(percent_flood_100, 1))),
+          color = NA) +
+  scale_fill_viridis_c(option = "mako", name = "100-Year Flood %", direction = -1) +
+  labs(title = "100-Year Flood Plain in Washington, D.C.",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+# Convert to interactive plot
+ggplotly(p, tooltip = "text")
+
+```
+
+## 500-Year Flood Plains
+
+```{r}
+
+p <- ggplot(flood_map) +
+  geom_sf(aes(fill = percent_flood_500,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "500-Year Flood %: ", round(percent_flood_500, 1))),
+          color = NA) +
+  scale_fill_viridis_c(option = "mako", name = "100-Year Flood %", direction = -1) +
+  labs(title = "500-Year Flood Plain in Washington, D.C.",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+# Convert to interactive plot
+ggplotly(p, tooltip = "text")
+```
+
+## Tidal Flood Plains
+
+```{r}
+# Percent Tidal plot
+p <- ggplot(flood_map) +
+  geom_sf(aes(fill = percent_tidal,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Tidal Zone %: ", round(percent_tidal, 1))),
+          color = NA) +
+  scale_fill_viridis_c(option = "mako", name = "Tidal Flood %", direction = -1) +
+  labs(title = "Tidal Flood Plain in Washington, D.C.",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+# Convert to interactive plot
+ggplotly(p, tooltip = "text")
+```
+
+## Blue Zones
+
+```{r}
+
+# Percent Blue Zone Plot
+p <- ggplot(flood_map) +
+  geom_sf(aes(fill = blue_percent,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Blue Zone %: ", round(blue_percent, 1))),
+          color = NA) +
+  scale_fill_viridis_c(option = "mako", name = "Blue Zone %", direction = -1) +
+  labs(title = "Blue Zones in Washington, D.C.",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+# Convert to interactive plot
+ggplotly(p, tooltip = "text")
+
+```
+
+## Open Data DC
+
+### Police Stations
+
+```{r}
+# Read in police station shapefile
+police_stations <- st_read("Police_Stations.shp")
+
+ggplot() +
+  geom_sf(data = dc_tracts, fill = "white", color = "black", lwd = 0.2) +
+  geom_sf(data = police_stations, color = "red", size = 2) +
+  labs(title = "Police Stations in Washington, DC",
+       caption = "Data source: Open Data D.C. & US Census") +
+  theme_minimal()
+
+police_stations <- st_transform(police_stations, st_crs(dc_tracts))
+
+stations_with_geoids <- st_join(police_stations, dc_tracts[, "GEOID"], join = st_within)
+
+# Count by GEOID
+stations_per_tract <- stations_with_geoids %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "num_stations")
+
+tract_police_count <- dc_tracts %>%
+  left_join(stations_per_tract, by = "GEOID") %>%
+  mutate(num_stations = replace_na(num_stations, 0)) %>%
+  select(GEOID, num_stations)
+
+# View result
+tract_police_count
+
+p <- ggplot(tract_police_count) +
+  geom_sf(aes(fill = num_stations,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Stations: ", num_stations)),
+          color = "light grey",
+          size = 0.1,
+          alpha = 0.8) +
+  scale_fill_viridis_c(option = "mako", name = "Police Stations", direction = -1) +
+  labs(title = "Police Stations by Census Tract",
+       subtitle = "Washington, D.C. (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+# Interactive
+ggplotly(p, tooltip = "text")
+```
+
+### School Crossing Guards
+
+```{r}
+# Read in police station shapefile
+cross_guards <- st_read("School_Crossing_Guards.shp")
+
+ggplot() +
+  geom_sf(data = dc_tracts, fill = "white", color = "black", lwd = 0.2) +
+  geom_sf(data = cross_guards, color = "red", size = 2) +
+  labs(title = "School Crossing Guards in Washington, DC",
+       caption = "Data source: Open Data D.C. & US Census") +
+  theme_minimal()
+
+cross_guards <- st_transform(cross_guards, st_crs(dc_tracts))
+
+# Spatial join: assign GEOID to crossing guards based on which tract they fall in
+cross_guards_with_geoids <- st_join(cross_guards, dc_tracts[, "GEOID"], join = st_within)
+
+# Count crossing guards by GEOID
+cross_guards_per_tract <- cross_guards_with_geoids %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "num_cross_guards")
+
+# Join counts back to census tracts, filling missing with zero
+tract_cross_guards_count <- dc_tracts %>%
+  left_join(cross_guards_per_tract, by = "GEOID") %>%
+  mutate(num_cross_guards = replace_na(num_cross_guards, 0))
+
+p <- ggplot(tract_cross_guards_count) +
+  geom_sf(aes(fill = num_cross_guards,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Crossing Guards: ", 
+                            num_cross_guards)),
+          color = "light grey",
+          size = 0.1,
+          alpha = 0.8) +
+  scale_fill_viridis_c(option = "mako", name = "Crossing Guards", direction = -1) +
+  labs(title = "School Crossing Guards by Census Tract",
+       subtitle = "Washington, D.C. (2020)",
+       caption = "Source: Open Data DC & US Census") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+
+```
+
+### Hospitals
+
+```{r}
+# Read in police station shapefile
+hospitals <- st_read("Hospitals.shp")
+
+ggplot() +
+  geom_sf(data = dc_tracts, fill = "white", color = "black", lwd = 0.2) +
+  geom_sf(data = hospitals, color = "red", size = 2) +
+  labs(title = "Hospitals in Washington, DC",
+       caption = "Data source: Open Data D.C. & US Census") +
+  theme_minimal()
+
+# Make sure CRS matches census tracts
+hospitals <- st_transform(hospitals, st_crs(dc_tracts))
+
+# Spatial join: assign GEOID to each hospital
+hospitals_with_geoids <- st_join(hospitals, dc_tracts[, "GEOID"], join = st_within)
+
+# Count hospitals per census tract
+hospitals_per_tract <- hospitals_with_geoids %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "num_hospitals")
+
+# Join counts back to census tracts, fill NAs with 0
+tract_hospital_count <- dc_tracts %>%
+  left_join(hospitals_per_tract, by = "GEOID") %>%
+  mutate(num_hospitals = replace_na(num_hospitals, 0))
+
+# Plot interactive map
+p <- ggplot(tract_hospital_count) +
+  geom_sf(aes(fill = num_hospitals,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Hospitals: ", num_hospitals)),
+          color = "light grey",
+          size = 0.1,
+          alpha = 0.8) +
+  scale_fill_viridis_c(option = "mako", name = "Hospitals", direction = -1) +
+  labs(title = "Hospitals by Census Tract",
+       subtitle = "Washington, D.C. (2020)",
+       caption = "Source: Open Data DC & US Census") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+```
+
+### Fire Stations
+
+```{r}
+# Read in police station shapefile
+fire_stations <- st_read("Fire_Stations.shp")
+
+ggplot() +
+  geom_sf(data = dc_tracts, fill = "white", color = "black", lwd = 0.2) +
+  geom_sf(data = fire_stations, color = "red", size = 2) +
+  labs(title = "Fire Stations in Washington, DC",
+       caption = "Data source: Open Data D.C. & US Census") +
+  theme_minimal()
+
+# Transform CRS to match census tracts
+fire_stations <- st_transform(fire_stations, st_crs(dc_tracts))
+
+# Spatial join: assign GEOID to each fire station
+fire_stations_with_geoids <- st_join(fire_stations, dc_tracts[, "GEOID"], join = st_within)
+
+# Count fire stations per census tract
+fire_stations_per_tract <- fire_stations_with_geoids %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "num_fire_stations")
+
+# Join counts back to census tracts and fill NAs with 0
+tract_fire_station_count <- dc_tracts %>%
+  left_join(fire_stations_per_tract, by = "GEOID") %>%
+  mutate(num_fire_stations = replace_na(num_fire_stations, 0))
+
+# Plot interactive map
+p <- ggplot(tract_fire_station_count) +
+  geom_sf(aes(fill = num_fire_stations,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Fire Stations: ", num_fire_stations)),
+          color = "light grey",
+          size = 0.1,
+          alpha = 0.8) +
+  scale_fill_viridis_c(option = "mako", name = "Fire Stations", direction = -1) +
+  labs(title = "Fire Stations by Census Tract",
+       subtitle = "Washington, D.C. (2020)",
+       caption = "Source: Open Data DC & US Census") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+
+```
+
+## Buildings
+
+## Old Housing
+
+```{r}
+### Old Housing
+
+vars <- c(
+  total = "B25034_001",
+  pre_1939 = "B25034_002",
+  `1940_1949` = "B25034_003",
+  `1950_1959` = "B25034_004",
+  `1960_1969` = "B25034_005",
+  `1970_1979` = "B25034_006"
+)
+
+# Get data
+dc_housing_age <- get_acs(
+  geography = "tract",
+  state = "DC",
+  year = 2022,
+  variables = vars,
+  geometry = TRUE,
+  output = "wide"
+)
+
+# Calculate percent built before 1980
+dc_housing_age <- dc_housing_age %>%
+  mutate(
+    pre1980 = pre_1939E + `1940_1949E` + `1950_1959E` + `1960_1969E` + `1970_1979E`,
+    pct_pre1980 = 100 * pre1980 / totalE
+  )
+
+# Plot with ggplot
+p <- ggplot(dc_housing_age) +
+  geom_sf(aes(fill = pct_pre1980, text = paste0(
+    "Tract: ", GEOID, "<br>",
+    "% Pre-1980 Housing: ", round(pct_pre1980, 1), "%"
+  )), color = NA) +
+  scale_fill_viridis_c(
+    option = "cividis",
+    name = "% Pre-1980 Housing",
+    na.value = "gray90",
+    direction = -1
+  ) +
+  labs(
+    title = "Percent of Housing Built Before 1980 by Census Tract",
+    subtitle = "Washington, DC (ACS 2022 5-year)",
+    caption = "Source: U.S. Census Bureau, Table B25034"
+  ) +
+  theme_minimal()
+
+# Make interactive
+ggplotly(p, tooltip = "text")
+```
+
+Created a buffer zone of 407 meters around all bodies of water within D.C. region, as this is our best indicator for a census tracts being classified as high risk within a flood zone, based on the previous composite flood score.
+
+### Race
+
+```{r}
+
+race_vars <- c(
+  total = "B03002_001",
+  white_nonhispanic = "B03002_003"
+)
+
+dc_race <- get_acs(
+  geography = "tract",
+  variables = race_vars,
+  state = "DC",
+  year = 2022,
+  geometry = TRUE,
+  output = "wide"
+)
+
+# Calculate % minority (i.e., everyone who is NOT white non-Hispanic)
+dc_race <- dc_race %>%
+  mutate(
+    pct_minority = 100 * (totalE - white_nonhispanicE) / totalE
+  )
+
+# Create ggplot map
+p <- ggplot(dc_race) +
+  geom_sf(aes(fill = pct_minority, text = paste0(
+    "Tract: ", GEOID, "<br>",
+    "Minority %: ", round(pct_minority, 1), "%"
+  )), color = NA) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    name = "% Minority",
+    na.value = "gray80",
+    direction = -1
+  ) +
+  labs(
+    title = "Percent Minority Population by Census Tract",
+    subtitle = "Washington, DC (ACS 2022 5-year)",
+    caption = "Source: U.S. Census Bureau, ACS 2022"
+  ) +
+  theme_minimal()
+
+# Make it interactive with ggplotly
+ggplotly(p, tooltip = "text")
+```
+
+### Unemployment Rate
+
+```{r}
+unemp_vars <- c(
+  labor_force = "B23025_003",
+  unemployed = "B23025_005"
+)
+
+dc_unemp <- get_acs(
+  geography = "tract",
+  state = "DC",
+  year = 2022,
+  variables = unemp_vars,
+  geometry = TRUE,
+  output = "wide"
+)
+
+# Calculate % unemployment
+dc_unemp <- dc_unemp %>%
+  mutate(
+    pct_unemp = 100 * unemployedE / labor_forceE
+  )
+
+# Create ggplot map
+p <- ggplot(dc_unemp) +
+  geom_sf(aes(fill = pct_unemp, text = paste0(
+    "Tract: ", GEOID, "<br>",
+    "Unemployment %: ", round(pct_unemp, 1), "%"
+  )), color = NA) +
+  scale_fill_viridis_c(
+    option = "inferno",
+    name = "% Unemployed",
+    na.value = "gray90",
+    direction = -1
+  ) +
+  labs(
+    title = "Unemployment Rate by Census Tract",
+    subtitle = "Washington, DC (ACS 2022 5-year)",
+    caption = "Source: U.S. Census Bureau, ACS 2022"
+  ) +
+  theme_minimal()
+
+# Make it interactive with ggplotly
+ggplotly(p, tooltip = "text")
+
+```
+
+### Cleaning Data
+
+```{r}
+
+# 1. Floodplain data (from flood_summary)
+flood_data <- read_csv("dc_flood_summary.csv", 
+                      col_types = cols(GEOID = col_character())) %>%
+  select(GEOID, 
+         floodplain_500 = percent_flood_500,
+         floodplain_100 = percent_flood_100,
+         tidal_floodplain = percent_tidal,
+         blue_zone = blue_percent) 
+
+# 2. SSO data
+sso_data <- dc_tracts_sso %>%
+  st_drop_geometry() %>%
+  select(GEOID, sso = SSO_Count)
+
+# 3. Elevation data
+
+elevation_data <- flood_depth_risk %>%
+  st_drop_geometry() %>%
+  select(GEOID, 
+         ground_elevation = Mean_Elevation,
+         base_elevation = mean_elev_m,
+         one_hundred_year_floodplain_risk = flood_risk)
+
+# 4. Distance to water
+water_dist_data <- dc_tracts_dist %>%
+  st_drop_geometry() %>%
+  select(GEOID, dist_to_water = Distance_to_Water_m)
+
+# 5. Health data
+health_data <- places_data %>%
+  filter(Short_Question_Text %in% c('Current Asthma', 'Diabetes')) %>%
+  mutate(LocationID = as.character(LocationID)) %>%
+  select(LocationID, Measure = Short_Question_Text, Value = Data_Value) %>%
+  pivot_wider(names_from = Measure, values_from = Value) %>%
+  rename(GEOID = LocationID,
+         asthma = 'Current Asthma',
+         diabetes = 'Diabetes')
+
+# 6. Poverty data
+poverty_data <- poverty_sf %>%
+  select(GEOID, pct_poverty) %>%
+  st_set_geometry(NULL)
+
+# 7. Age data
+age_data <- age_wide %>%
+  select(GEOID, percent_vulnerable) %>% 
+  st_set_geometry(NULL)
+
+# 8. Unemployment Data
+unemp_data <- dc_unemp %>%
+  select(GEOID, pct_unemp) %>% 
+  st_set_geometry(NULL)
+
+# 9. Fire Stations
+fire_data <- tract_fire_station_count %>%
+  select(GEOID, num_fire_stations) %>% 
+  st_set_geometry(NULL)
+
+# 10. Hospitals
+
+hospitals_data <- tract_hospital_count %>%
+  select(GEOID, num_hospitals) %>% 
+  st_set_geometry(NULL)
+
+# 11. Police Stations
+
+police_data <- tract_police_count %>%
+  select(GEOID, num_police_stations = num_stations) %>% 
+  st_set_geometry(NULL)
+
+# 12. School Crossing Guards
+
+school_guard_data <- tract_cross_guards_count %>%
+  select(GEOID, num_cross_guards) %>%
+  st_set_geometry(NULL)
+
+# 13. Minority Percentages
+
+race_data <- dc_race %>%
+  select(GEOID, pct_minority) %>%
+  st_set_geometry(NULL)
+
+# 14. Old Buildings
+
+building_data <- dc_housing_age %>%
+  select(GEOID, pct_old_housing = pct_pre1980) %>%
+  st_set_geometry(NULL)
+
+# 15. Buildings within Threshold Radius
+```
+
+### Consolidated Data Sets
+
+```{r}
+# Now join all these datasets to the tracts
+joined_dc_tracts <- dc_tracts %>%
+  left_join(flood_data, by = "GEOID") %>%
+  left_join(sso_data, by = "GEOID") %>%
+  left_join(elevation_data, by = "GEOID") %>%
+  left_join(water_dist_data, by = "GEOID") %>%
+  left_join(health_data, by = "GEOID") %>%
+  left_join(poverty_data, by = "GEOID") %>%
+  left_join(age_data, by = "GEOID") %>%
+  left_join(unemp_data, by = "GEOID") %>%
+  left_join(fire_data, by = "GEOID") %>%
+  left_join(hospitals_data, by = "GEOID") %>%
+  left_join(police_data, by = "GEOID") %>%
+  left_join(school_guard_data, by = "GEOID") %>%
+  left_join(race_data, by = "GEOID") %>%
+  left_join(building_data, by = "GEOID")
+
+# Now we can proceed with the normalization
+normalize <- function(x) {
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+# Extract numeric data frame without geometry
+df_numeric <- joined_dc_tracts %>%
+  st_set_geometry(NULL) %>%
+  select(-STATEFP, -COUNTYFP, -TRACTCE, -NAME, -NAMELSAD, -MTFCC, -FUNCSTAT, -ALAND, -AWATER, -INTPTLAT, -INTPTLON)
+  
+
+# Handle any NA values (replace with 0 or median as appropriate)
+df_numeric <- df_numeric %>%
+  mutate(across(-GEOID, ~replace_na(.x, median(.x, na.rm = TRUE))))
+
+```
+
+## Impact of Distance to Water on Flood Susceptibility
+
+```{r}
+
+library(stats)
+
+# Transforms set of correlated variables into new set of uncorrelated variables called principle components
+
+# Each variable is scaled based on Z-score 
+
+flood_vars <- df_numeric %>%
+  select(blue_zone, floodplain_500, floodplain_100, tidal_floodplain) %>%
+  scale()
+
+# Compute correlation matrix of scaled data
+# Perform eigen decompsition (find eigenvectors--principle components & eigenvalues--how much variance the principle component explains)
+pca_result <- prcomp(flood_vars, center = TRUE, scale. = TRUE)
+pca_result
+
+# Extract scores for the first principal component
+#PC1 = a_1*Z_1 + a_2*Z_2 + ... + a_n + Zn
+
+flood_scores <- pca_result$x[, 1]  # First PC
+flood_scores
+
+#  Add to original dataframe and calculate other variables
+pca_df <- df_numeric %>%
+  mutate(
+    minus_elevation = ground_elevation * -1,
+    minus_dist_to_water = dist_to_water * -1,
+    composite_flood_score = flood_scores  # PCA-based flood score
+  )
+
+pca_df
+
+
+```
+
+### Correlations (Pearson vs. Spearman)
+
+```{r}
+
+# change the weights, PCA
+
+# Lower elevation corresponds to higher flood risk
+# Lower distance corresponds to higher flood risk
+
+#c1 <- cor.test(pca_df$minus_elevation, pca_df$composite_flood_score)
+c2 <- cor.test(pca_df$minus_dist_to_water, pca_df$composite_flood_score)
+
+#c3 <- cor.test(pca_df$minus_elevation, pca_df$composite_flood_score, method = "spearman")
+c4 <- cor.test(pca_df$minus_dist_to_water, pca_df$composite_flood_score, method = "spearman")
+
+# Create a data frame with key values from each test
+corr_df <- data.frame(
+  variable = c("minus_dist_to_water", "minus_dist_to_water"),
+  method = c("pearson", "spearman"),
+  estimate = c(c2$estimate, c4$estimate),
+  p_value = c(c2$p.value, c4$p.value)
+)
+
+corr_df
+
+
+```
+
+#### Pearson (Linear)
+
+Distance to Water is 43.02% with our composite flood zone index.
+
+#### Spear-man (Parametric)
+
+Distance to Water is 51.3& with our composite flood zone index.
+
+### Graphs
+
+```{r}
+ggplot(pca_df, aes(x = dist_to_water, y = composite_flood_score)) + 
+  geom_point() + 
+  geom_smooth(method = "loess") +
+  labs(title = "Distance to Water vs Composite Score")
+```
+
+It appears the cut off until where elevation is no longer a useful indicator is approximately -27 meters above water. A distance of approximately 550-600 meters from a body of water is also associated with minimal flood risk.
+
+#### Utilize Decision Tree to Identify Best Cutoff Thresholds
+
+```{r}
+
+
+tree_model <- ctree(composite_flood_score ~ dist_to_water, data = pca_df)
+
+plot(tree_model)
+
+
+```
+
+Decision Tree above shows predicted Composite Flood Score based on certain values for Distance and Elevation.
+
+### Categorization into Low, Medium, & High Risk Zones
+
+```{r}
+# Create quantile-based categories (tertiles)
+pca_df <- pca_df %>%
+  mutate(
+    flood_risk_cat = case_when(
+      composite_flood_score >= quantile(composite_flood_score, 2/3, na.rm = TRUE) ~ "High",
+      composite_flood_score >= quantile(composite_flood_score, 1/3, na.rm = TRUE) ~ "Medium",
+      TRUE ~ "Low"
+    )
+  )
+
+# Convert to factor for classification tree
+pca_df$flood_risk_cat <- factor(pca_df$flood_risk_cat, levels = c("Low","Medium","High"))
+
+```
+
+```{r}
+
+# Classification tree to predict risk category
+tree_clf <- ctree(flood_risk_cat ~ dist_to_water, data = pca_df)
+
+# Plot the tree
+plot(tree_clf)
+
+
+```
+
+**Key Interpretations:** If distance to water is less than 407 meters, there is approximately an nearly 80% chance it is categorized as High exposure to floods, using our composite flood zone score. Given that distance to water is our key indicator, we're now going to determine how many buildings in each census tract are within 407 meters to the nearest body of water, and the percentage of area within a census tract that are within 407 meters to the nearest water.
+
+### Distance to Water (By Pix-elated Area)
+
+```{r}
+# Reproject tracts to match raster CRS
+dc_tracts_proj <- st_transform(dc_tracts, crs = crs(dist_raster))
+
+# Set threshold
+threshold <- 407.495  # meters
+
+# Calculate % of pixels in each tract below the threshold
+pct_under_407 <- exact_extract(dist_raster, dc_tracts_proj, function(values, coverage_fraction) {
+  total <- sum(!is.na(values))
+  under_thresh <- sum(values < threshold, na.rm = TRUE)
+  if (total == 0) return(0)
+  return(100 * under_thresh / total)
+})
+
+# Attach result to tracts
+dc_tracts_water_thresh <- dc_tracts_proj %>%
+  mutate(Pct_Under_407m = pct_under_407)
+
+dist_plot <- ggplot(dc_tracts_water_thresh) +
+  geom_sf(aes(fill = Pct_Under_407m,
+              text = paste0("Tract ID: ", GEOID,
+                            "<br>% Area within 407.495 m of Water: ",
+                            round(Pct_Under_407m, 1), "%")),
+          color = "white", size = 0.2, alpha = 0.8) +
+  scale_fill_viridis_c(option = "C", name = "% Area < 407.495m to Water", na.value = "gray90", direction = -1) +
+  labs(title = "Percent of Tract Area Within 407.495m of Water in DC") +
+  theme_minimal()
+
+
+ggplotly(dist_plot, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white", font = list(color = "black")))
+```
+
+```{r}
+
+
+# composite_scores <- na_df_numeric %>%
+#   mutate(
+#     blue_zone_norm        = normalize(blue_zone),
+#     floodplain_500_norm   = normalize(floodplain_500),
+#     floodplain_100_norm   = normalize(floodplain_100),
+#     tidal_floodplain_norm = normalize(tidal_floodplain),
+#     sso_norm              = normalize(sso),
+#     elevation_norm        = normalize(-elevation),  # negative elevation = higher risk
+#     dist_to_water_norm    = normalize(-dist_to_water),  # closer to water = higher risk
+#     asthma_norm           = normalize(asthma),
+#     diabetes_norm         = normalize(diabetes),
+#     income_norm           = normalize(income_poverty),
+#     age_norm              = normalize(age)
+#   )
+# 
+# 
+# #  mutate(
+# #     flood_index = 0.25 * blue_zone_norm +
+# #                   0.10 * floodplain_100_norm +
+# #                   0.05 * floodplain_500_norm +
+# #                   0.10 * tidal_floodplain_norm +
+# #                   0.20 * sso_norm +
+# #                   0.20 * elevation_norm +
+# #                   0.10 * dist_to_water_norm,
+# # 
+# #     svi_index = 0.30 * asthma_norm +
+# #                 0.30 * diabetes_norm +
+# #                 0.25 * income_norm +
+# #                 0.15 * age_norm,
+# # 
+# #     resident_concen = resident_concen) %>%
+# #   select(GEOID, flood_index, svi_index, resident_concen)
+# # 
+# # # Join indices back to spatial dataframe
+# # 
+# # final_df <- df_numeric %>%
+# #   left_join(composite_scores, by = "GEOID") %>%
+# #   mutate(vulnerability_index = 0.45 * (flood_index + svi_index) + 0.1*resident_concen)
+# # 
+# # final_df
+# # 
+# # write_csv(final_df, "final_df.csv")
+```
+
+### Buildings Within 407 Meters
+
+```{r}
+
+# Load tracts, buildings, and waterbodies
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf") %>% st_transform(32618)  # replace 32618 with your projected CRS
+buildings <- read_sf("Building_Footprints.shp") %>% st_transform(st_crs(dc_tracts))
+water <- read_sf("Waterbodies.shp") %>%
+  st_transform(st_crs(dc_tracts)) %>%
+  st_make_valid() %>%
+  st_union() %>%
+  st_buffer(dist = 407)
+
+buildings_near_water <- buildings[st_intersects(buildings, water, sparse = FALSE), ]
+
+buildings_with_tract <- st_join(buildings, dc_tracts["GEOID"])
+buildings_near_with_tract <- st_join(buildings_near_water, dc_tracts["GEOID"])
+
+total_buildings <- buildings_with_tract %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "total_buildings")
+
+near_buildings <- buildings_near_with_tract %>%
+  st_drop_geometry() %>%
+  count(GEOID, name = "near_water")
+
+building_stats <- total_buildings %>%
+  left_join(near_buildings, by = "GEOID") %>%
+  mutate(
+    near_water = replace_na(near_water, 0),
+    pct_near_water = 100 * near_water / total_buildings
+  )
+
+buildings_pct <- dc_tracts %>%
+  left_join(building_stats, by = "GEOID")
+
+p <- ggplot(buildings_pct) +
+  geom_sf(aes(fill = pct_near_water,
+              text = paste0("GEOID: ", GEOID, "<br>",
+                            "Percent of Buildings Near Water: ", round(pct_near_water, 1), "%")),
+          color = "light grey",
+          size = 0.1,
+          alpha = 0.8) +
+  scale_fill_viridis_c(
+    option = "mako",
+    direction = -1,
+    name = "% Near Water",
+    limits = c(0, 100),
+    oob = scales::squish
+  ) +
+  labs(
+    title = "Percent of Buildings Within 407m of Water",
+    subtitle = "Washington, D.C. (2020)",
+    caption = "Source: Open Data DC & US Census"
+  ) +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+
+```
+
+## Final Dataset
+
+```{r}
+
+water_thresh_data <- dc_tracts_water_thresh %>%
+  select(GEOID, pct_raster_407m = Pct_Under_407m) %>%
+  st_set_geometry(NULL)
+
+buildings_thresh_data <- buildings_pct %>%
+  select(GEOID, pct_buildings_407m = pct_near_water) %>%
+  st_set_geometry(NULL)
+
+final_df <- df_numeric %>%
+  left_join(water_thresh_data, by = "GEOID") %>% 
+  left_join(buildings_thresh_data, by = "GEOID")
+
+write_csv(final_df, "final_df.csv")
+```
+
+# Mapping
+
+## Flood Index
+
+```{r}
+dc_tracts_final <- dc_tracts %>%
+  left_join(composite_scores, by = "GEOID")
+
+ggplot(dc_tracts_final) +
+  geom_sf(aes(fill = flood_index)) +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Flood Susceptibility Index by Census Tract",
+       fill = "Flood Index")
+```
+
+## Social Vulnerability Index
+
+```{r}
+dc_tracts_final <- dc_tracts %>%
+  left_join(composite_scores, by = "GEOID")
+
+ggplot(dc_tracts_final) +
+  geom_sf(aes(fill = svi_index)) +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Social Vulnerability Index by Census Tract",
+       fill = "Social Vulnerability Index")
+```
