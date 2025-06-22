@@ -1,0 +1,414 @@
+---
+title: "Creating Vulnerability Indices Using Principal Component Analysis"
+author: "Matthew Menon"
+date: "2025-06-12"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+Load in necessary libraries.
+```{r, message=FALSE, warning=FALSE}
+library(readr)
+library(MASS)
+library(dplyr)
+library(factoextra)
+library(exactextractr)
+library(tigris)
+library(ggplot2)
+library(plotly)
+library(sf)
+library(tibble)
+library(GGally)
+```
+
+Set working directory and load in `final_df.csv` containing all the necessary data for all Principal Component Analyses. Create DC tracts for spatial maps of vulnerability indexes.
+```{r, results="hide"}
+# Set working directory
+setwd("C:/Users/matth/Desktop/Undergraduate-Research/GWU-Bootcamp/Final Project")
+
+# Read your CSV
+data <- read_csv("Data/final_df.csv",
+                 col_types = cols(GEOID = col_character()), progress = FALSE)
+
+dc_tracts <- tracts(state = "DC", year = 2020, class = "sf")
+```
+
+## Flood Suscepbitility Index
+
+Subset the data from the original dataframe into variables focused on flood susceptibility. Then scale all variables except for `GEOID`, and convert the `flood_scaled` dataframe into a tibble for ease of use.
+```{r, message=FALSE, warning=FALSE}
+flood_data <- data %>%
+  dplyr::select(GEOID, floodplain_500, floodplain_100, tidal_floodplain, blue_zone, sso, ground_elevation, base_elevation, dist_to_water, pct_raster_407m, pct_buildings_407m) %>%
+  mutate(diff_elevation = ground_elevation - base_elevation)
+
+# Scale numeric columns except GEOID
+flood_scaled <- flood_data %>%
+  mutate(across(
+    .cols = where(is.numeric) & !matches("GEOID"),
+    .fns = ~ as.numeric(scale(.x))
+  ))
+flood_scaled = as.tibble(flood_scaled)
+```
+
+Construct a correlation matrix of all possible variables to include in the Principal Component Analysis. Based on the results, I choose to remove `ground_elevation`, `base_elevation`, `sso`, `dist_to_water`, and `pct_buildings_407m` in addition to `GEOID` before running the analysis.
+```{r}
+ggpairs(flood_scaled %>% dplyr::select(-GEOID),
+        upper = list(continuous = wrap("cor", size = 3)),
+        lower = list(continuous = wrap("smooth", alpha = 0.3)),
+        diag = list(continuous = wrap("densityDiag")))
+
+# Remove non-numeric for PCA input
+pca_input <- flood_scaled %>% dplyr::select(-GEOID, -ground_elevation, -base_elevation, -sso, -dist_to_water, -pct_buildings_407m)
+```
+
+Run a Principal Component Analysis on flood variables of interest to obtain principal components, the proportion of total variance they explain, and the loadings of each principal component for every variable.
+```{r}
+# Run PCA on scaled data (already scaled, so no centering/scaling here)
+pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
+
+# Summary to see variance explained
+pca_summary <- summary(pca)
+
+# Print variance explained by each PC (proportion of variance)
+print(pca_summary$importance)
+
+print(pca$rotation)
+```
+
+Create a scree plot to show how much of the variance each principal component from the PCA explains in the data. I choose to only include on principal component in the flood susceptibility index since the "elbow" of the scree plot occurs after principal component 1.
+```{r}
+# Generate a scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "steelblue", barcolor = "black") +
+  labs(title = "Scree Plot for Flood Vulnerability Principal Component Analysis", x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Add the flood susceptibility index back to the original datasets. 
+```{r}
+# Add flood susceptibility index to original data
+flood_data$flood_index <- pca$x[, 1]
+data$flood_index <- pca$x[, 1]
+```
+
+Create a bar chart to show the distribution of the flood susceptibility index.
+```{r, message=FALSE}
+# Plot flood susceptibility index histogram
+ggplot(flood_data, aes(x = flood_index)) +
+  geom_histogram(fill = "steelblue") +
+  labs(title = "Distribution of Flood Susceptibility Index Amongst Washington D.C. Census Tracts",
+       x = "Flood Susceptibility Index", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Generate a spatial representation of the flood susceptibility index described by Principal Component 1 of the above PCA to visualize most flood susceptible census tracts in Washington D.C.
+```{r, message=FALSE, warning=FALSE}
+# Join with spatial data for mapping
+dc_map <- dc_tracts %>%
+  left_join(flood_data, by = "GEOID")
+
+# Spatial plot with ggplot + plotly
+pca_plot <- ggplot(dc_map) +
+  geom_sf(aes(fill = flood_index,
+              text = paste0("Flood Susceptibility: ", round(flood_index, 2))),
+          color = NA) +
+  scale_fill_viridis_c(option = "rocket", name = "Flood Susceptibility", direction = -1) +
+  labs(title = "Flood Susceptibility Index (PCA-Based)",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+ggplotly(pca_plot, tooltip = "text")
+```
+
+
+## Social and Health Vulnerability Index
+
+Subset the data from the original dataframe into variables focused on social and health vulnerability. Then scale all variables except for `GEOID`, and convert the `community_scaled` dataframe into a tibble for ease of use.
+```{r}
+community_data <- data %>%
+  dplyr::select(GEOID, asthma, diabetes, pct_poverty, percent_vulnerable, pct_unemp, pct_minority)
+
+# Scale numeric columns except GEOID
+community_scaled <- community_data %>%
+  mutate(across(
+    .cols = where(is.numeric) & !matches("GEOID"),
+    .fns = ~ as.numeric(scale(.x))
+  ))
+community_scaled = as.tibble(community_scaled)
+```
+
+Construct a correlation matrix of all possible variables to include in the Principal Component Analysis. Based on the results, I choose to only remove  `GEOID` before running the analysis.
+```{r}
+ggpairs(community_scaled %>% dplyr::select(-GEOID),
+        upper = list(continuous = wrap("cor", size = 3)),
+        lower = list(continuous = wrap("smooth", alpha = 0.3)),
+        diag = list(continuous = wrap("densityDiag")))
+
+# Remove non-numeric for PCA input
+pca_input <- community_scaled %>% dplyr::select(-GEOID)
+```
+
+Run a Principal Component Analysis on social and health variables of interest to obtain principal components, the proportion of total variance they explain, and the loadings of each principal component for every variable.
+```{r}
+# Run PCA on scaled data (already scaled, so no centering/scaling here)
+pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
+
+# Summary to see variance explained
+pca_summary <- summary(pca)
+
+# Print variance explained by each PC (proportion of variance)
+print(pca_summary$importance)
+
+print(pca$rotation)
+```
+
+Create a scree plot to show how much of the variance each principal component from the PCA explains in the data. I choose to only include principal component 1 in the social and health vulnerability index since the "elbow" of the scree plot occurs after principal component 1.
+```{r}
+# Generate a scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "steelblue", barcolor = "black") +
+  labs(title = "Scree Plot for Social and Health Vulnerability Principal Component Analysis", x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Add the social and health vulnerability index back to the original datasets. 
+```{r}
+# Add social + health vulnerability index to original data
+community_data$social_health_index <- pca$x[,1]
+data$social_health_index <- pca$x[,1]
+```
+
+Create a bar chart to show the distribution of the social and health vulnerability index.
+```{r, message=FALSE}
+# Plot social and health vulnerability histogram
+ggplot(community_data, aes(x = social_health_index)) +
+  geom_histogram(fill = "steelblue") +
+  labs(title = "Distribution of Social and Health Vulnerability Index Amongst Washington D.C. Census Tracts",
+       x = "Social and Health Vulnerability Index", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Generate a spatial representation of the social and health vulnerability index described by Principal Components 1 and 2 of the above PCA to visualize most vulnerable areas when considering health and social demographic factors by census tracts in Washington D.C.
+```{r, message=FALSE, warning=FALSE}
+# Join with spatial data for mapping
+dc_map <- dc_tracts %>%
+  left_join(community_data, by = "GEOID")
+
+# Spatial plot with ggplot + plotly
+pca_plot <- ggplot(dc_map) +
+  geom_sf(aes(fill = social_health_index,
+              text = paste0("Flood Vulnerability: ", round(social_health_index, 2))),
+          color = NA) +
+  scale_fill_viridis_c(option = "rocket", name = "Social and Health Vulnerability", direction = -1) +
+  labs(title = "Social and Health Vulnerability Index (PCA-Based)",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+ggplotly(pca_plot, tooltip = "text")
+```
+
+## Infrastructure Index
+
+Subset the data from the original dataframe into variables focused on infrastructure. Then scale all variables except for `GEOID`, and convert the `infrastructure_scaled` dataframe into a tibble for ease of use.
+```{r}
+infrastructure_data <- data %>%
+  dplyr::select(GEOID, pct_old_housing, num_fire_stations, num_hospitals, num_police_stations, num_cross_guards)
+
+# Scale numeric columns except GEOID
+infrastructure_scaled <- infrastructure_data %>%
+  mutate(across(
+    .cols = where(is.numeric) & !matches("GEOID"),
+    .fns = ~ as.numeric(scale(.x))
+  ))
+infrastructure_scaled = as.tibble(infrastructure_scaled)
+```
+
+Construct a correlation matrix of all possible variables to include in the Principal Component Analysis. Based on the results, I choose to only `GEOID` before running the analysis, as they all show very low correlation and there is no clear variable that to be removed over the others.
+```{r}
+ggpairs(infrastructure_scaled %>% dplyr::select(-GEOID),
+        upper = list(continuous = wrap("cor", size = 3)),
+        lower = list(continuous = wrap("smooth", alpha = 0.3)),
+        diag = list(continuous = wrap("densityDiag")))
+
+# Remove non-numeric for PCA input
+pca_input <- infrastructure_scaled %>% dplyr::select(-GEOID)
+```
+
+Run a Principal Component Analysis on infrastructure variables of interest to obtain principal components, the proportion of total variance they explain, and the loadings of each principal component for every variable.
+```{r}
+# Run PCA on scaled data (already scaled, so no centering/scaling here)
+pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
+
+# Summary to see variance explained
+pca_summary <- summary(pca)
+
+# Print variance explained by each PC (proportion of variance)
+print(pca_summary$importance)
+
+print(pca$rotation)
+```
+
+Create a scree plot to show how much of the variance each principal component from the PCA explains in the data. I notice the linearity of the scree plot, and the little variance being explained by the first principal component. Since the first principal components don't explain significantly more of the variance compared to the later ones, I decide to take a different approach in creating an infrastructure vulnerability index.
+```{r}
+# Generate a scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "steelblue", barcolor = "black") +
+  labs(title = "Scree Plot for Flood Vulnerability Principal Component Analysis", x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Instead of utilizing Principal Component Analysis, in this case I simply utilize equal weights of 0.2 for each of the five infrastructure variables after normalizing them to create the infrastructure index.
+```{r}
+infrastructure_data <- infrastructure_data %>%
+  mutate(across(c(num_fire_stations, num_hospitals, num_police_stations, num_cross_guards, pct_old_housing),
+                ~ (. - min(.)) / (max(.) - min(.)))) %>%
+  mutate(infra_index = 0.2 * (1 - num_fire_stations)
+                     + 0.2 * (1 - num_hospitals)
+                     + 0.2 * (1 - num_police_stations)
+                     + 0.2 * (1 - num_cross_guards)
+                     + 0.2 * pct_old_housing)
+
+data$infra_index = infrastructure_data$infra_index
+```
+
+Create a bar chart to show the distribution of the infrastructure vulnerability index.
+```{r, message=FALSE}
+# Plot infrastructure vulnerability histogram
+ggplot(infrastructure_data, aes(x = infra_index)) +
+  geom_histogram(fill = "steelblue") +
+  labs(title = "Distribution of Infrastructure Vulnerability Index Amongst Washington D.C. Census Tracts",
+       x = "Infrastructure Vulnerability Index", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Generate a spatial representation of the infrastructure vulnerability index described by equal weights to all variables to visualize most vulnerable areas when considering presence of key infrastructure by census tracts in Washington D.C.
+```{r, message=FALSE, warning=FALSE}
+# Join with spatial data for mapping
+dc_map <- dc_tracts %>%
+  left_join(infrastructure_data, by = "GEOID")
+
+# Spatial plot with ggplot + plotly
+pca_plot <- ggplot(dc_map) +
+  geom_sf(aes(fill = infra_index,
+              text = paste0("Infrastructure Vulnerability: ", round(infra_index, 2))),
+          color = NA) +
+  scale_fill_viridis_c(option = "rocket", name = "Infrastructure Vulnerability", direction = -1) +
+  labs(title = "Infrastructure Vulnerability Index",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+ggplotly(pca_plot, tooltip = "text")
+```
+
+## Composite Vulnerability Index
+
+Subset the data from the original dataframe into the three indices derived from the above analyses. Then scale all variables except for `GEOID`, and convert the `community_scaled` dataframe into a tibble for ease of use.
+```{r}
+indices_data <- data %>%
+  dplyr::select(GEOID, flood_index, social_health_index, infra_index)
+
+# Scale numeric columns except GEOID
+indices_scaled <- indices_data %>%
+  mutate(across(
+    .cols = where(is.numeric) & !matches("GEOID"),
+    .fns = ~ as.numeric(scale(.x))
+  ))
+indices_scaled = as.tibble(indices_scaled)
+```
+
+Construct a correlation matrix of all possible variables to include in the Principal Component Analysis. Based on the results, since all the indices are extremely uncorrelated with one another, I choose to only remove  `GEOID` before running the analysis.
+```{r}
+ggpairs(indices_scaled %>% dplyr::select(-GEOID),
+        upper = list(continuous = wrap("cor", size = 3)),
+        lower = list(continuous = wrap("smooth", alpha = 0.3)),
+        diag = list(continuous = wrap("densityDiag")))
+
+# Remove non-numeric for PCA input
+pca_input <- indices_scaled %>% dplyr::select(-GEOID)
+```
+
+Run a Principal Component Analysis on all the indices found above to obtain principal components, the proportion of total variance they explain, and the loadings of each principal component for every variable.
+```{r}
+# Run PCA on scaled data (already scaled, so no centering/scaling here)
+pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
+
+# Summary to see variance explained
+pca_summary <- summary(pca)
+
+# Print variance explained by each PC (proportion of variance)
+print(pca_summary$importance)
+
+print(pca$rotation)
+```
+
+Create a scree plot to show how much of the variance each principal component from the PCA explains in the data. As was the case with the infrastructure index, each principal component explains a similar amount of variation compared to the previous, meaning there is no clear number of principal components to use. It is smarter to utilize weights independent of this analysis in this case.
+```{r}
+# Generate a scree plot
+fviz_eig(pca, addlabels = TRUE, barfill = "steelblue", barcolor = "black") +
+  labs(title = "Scree Plot for Flood Vulnerability Principal Component Analysis", x = "Principal Components", y = "Percentage of Variance Explained") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Instead of utilizing Principal Component Analysis, I normalizing each of the vulnerability indices before assigning weights to them based on their importance to the study. The primary focus is to understand how flood susceptibility and social plus health vulnerability are related, while infrastructure is of less concern but still important nonetheless. This is why I chose to apply equal weights of 0.4 to the flood index and to the social and health vulnerability index, and a smaller weight of 0.2 to the infrastructure index.
+```{r}
+indices_data <- indices_data %>%
+  mutate(across(c(flood_index, social_health_index, infra_index),
+                ~ (. - min(.)) / (max(.) - min(.)))) %>%
+  mutate(composite_index = 0.5 * flood_index
+                     + 0.4 * social_health_index
+                     + 0.1 * infra_index)
+
+data$composite_index = indices_data$composite_index
+```
+
+Create a bar chart to show the distribution of the composite vulnerability index.
+```{r, message=FALSE}
+# Plot composite vulnerability histogram
+ggplot(indices_data, aes(x = composite_index)) +
+  geom_histogram(fill = "steelblue") +
+  labs(title = "Distribution of Composite Vulnerability Index Amongst Washington D.C. Census Tracts",
+       x = "Composite Vulnerability Index", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Generate a spatial representation of the composite vulnerability index described by custom weights to the three indices created throughout this analyses to visualize most vulnerable census tracts overall in Washington D.C.
+```{r, message=FALSE, warning=FALSE}
+# Join with spatial data for mapping
+dc_map <- dc_tracts %>%
+  left_join(indices_data, by = "GEOID")
+
+# Spatial plot with ggplot + plotly
+pca_plot <- ggplot(dc_map) +
+  geom_sf(aes(fill = composite_index,
+              text = paste0("Composite Vulnerability: ", round(composite_index, 2))),
+          color = NA) +
+  scale_fill_viridis_c(option = "rocket", name = "Composite Vulnerability", direction = -1) +
+  labs(title = "Composite Vulnerability Index",
+       subtitle = "Census Tracts (2020)",
+       caption = "Source: Open Data DC") +
+  theme_minimal()
+
+ggplotly(pca_plot, tooltip = "text")
+```
+
+Once all the analyses are complete and every index is fully derived, save them to the original data set.
+```{r}
+# Save results
+write.csv(data, "Data/flood_vulnerability_scores.csv", row.names = FALSE)
+```
+
